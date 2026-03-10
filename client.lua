@@ -1,0 +1,788 @@
+
+local RES_NAME = GetCurrentResourceName()
+
+local settings = {
+    defaultPlaySound = Config.DefaultPlaySound,
+    deathSound = Config.DefaultDeathSound,
+    rangeLevel = Config.DefaultRangeLevel,
+    volumeLevel = Config.DefaultVolumeLevel,
+    favorites = {},
+    favoriteSlots = {},
+    favoriteSlotVolumes = {}
+}
+
+local uiOpen = false
+local handsUp = false
+local lastPlayAt = 0
+local wasDead = false
+local currentPlaySound = Config.DefaultPlaySound
+local selectedSlot = 0
+local activeSounds = {}
+local pendingRequests = {}
+local soundCatalog = {}
+local deletedCatalog = {}
+local deletedMap = {}
+local isAdmin = false
+local previewSoundId = 'preview_local'
+local showRangePreview = false
+
+local function debugLog(...)
+    if Config.Debug then
+        print(('^6[%s/client]^7'):format(RES_NAME), ...)
+    end
+end
+
+local function showNotification(msg)
+    BeginTextCommandThefeedPost('STRING')
+    AddTextComponentSubstringPlayerName(msg)
+    EndTextCommandThefeedPostTicker(false, false)
+end
+
+local function showHelp(msg)
+    BeginTextCommandDisplayHelp('STRING')
+    AddTextComponentSubstringPlayerName(msg)
+    EndTextCommandDisplayHelp(0, false, true, -1)
+end
+
+local function sendUi(action, payload)
+    payload = payload or {}
+    payload.action = action
+    SendNUIMessage(payload)
+end
+
+local function cloneMap(input)
+    local out = {}
+    if type(input) ~= 'table' then return out end
+    for k, v in pairs(input) do
+        out[k] = v and true or false
+    end
+    return out
+end
+
+local function cloneSlots(input)
+    local out = {}
+    if type(input) ~= 'table' then return out end
+    for i = 1, 9 do
+        local key = tostring(i)
+        local value = input[key] or input[i]
+        if type(value) == 'string' and Config.IsValidSound(value) and not deletedMap[value] then
+            out[key] = value
+        end
+    end
+    return out
+end
+
+local function cloneSlotVolumes(input)
+    local out = {}
+    if type(input) ~= 'table' then return out end
+    for i = 1, 9 do
+        local key = tostring(i)
+        local value = tonumber(input[key] or input[i]) or Config.DefaultVolumeLevel
+        out[key] = Config.GetVolumeLevel(value)
+    end
+    return out
+end
+
+local function sanitizeSettings()
+    settings.defaultPlaySound = Config.NormalizeSoundName(settings.defaultPlaySound)
+    if not Config.IsValidSound(settings.defaultPlaySound) or deletedMap[settings.defaultPlaySound] then
+        settings.defaultPlaySound = Config.DefaultPlaySound
+    end
+
+    settings.deathSound = Config.NormalizeSoundName(settings.deathSound)
+    if settings.deathSound ~= '' and (not Config.IsValidSound(settings.deathSound) or deletedMap[settings.deathSound]) then
+        settings.deathSound = ''
+    end
+
+    settings.rangeLevel = Config.GetRangeLevel(settings.rangeLevel)
+    settings.volumeLevel = Config.GetVolumeLevel(settings.volumeLevel)
+    settings.favorites = cloneMap(settings.favorites)
+    settings.favoriteSlots = cloneSlots(settings.favoriteSlots)
+    settings.favoriteSlotVolumes = cloneSlotVolumes(settings.favoriteSlotVolumes)
+
+    for file in pairs(settings.favorites) do
+        if deletedMap[file] or not Config.IsValidSound(file) then
+            settings.favorites[file] = nil
+        end
+    end
+
+    for i = 1, 9 do
+        local key = tostring(i)
+        local file = settings.favoriteSlots[key]
+        if file and (deletedMap[file] or not Config.IsValidSound(file)) then
+            settings.favoriteSlots[key] = nil
+        end
+        if not settings.favoriteSlotVolumes[key] then
+            settings.favoriteSlotVolumes[key] = Config.DefaultVolumeLevel
+        end
+    end
+
+    if selectedSlot > 0 then
+        local slotFile = settings.favoriteSlots[tostring(selectedSlot)]
+        if not slotFile then
+            selectedSlot = 0
+            currentPlaySound = settings.defaultPlaySound
+        end
+    end
+
+    currentPlaySound = Config.NormalizeSoundName(currentPlaySound)
+    if deletedMap[currentPlaySound] or not Config.IsValidSound(currentPlaySound) then
+        currentPlaySound = selectedSlot > 0 and (settings.favoriteSlots[tostring(selectedSlot)] or settings.defaultPlaySound) or settings.defaultPlaySound
+    end
+end
+
+local function getVoiceRange()
+    local pmaDistance = LocalPlayer and LocalPlayer.state and LocalPlayer.state.proximity and LocalPlayer.state.proximity.distance
+    if pmaDistance and pmaDistance > 0 then
+        return pmaDistance
+    end
+
+    local mumbleDistance = MumbleGetTalkerProximity()
+    if mumbleDistance and mumbleDistance > 0 then
+        return mumbleDistance
+    end
+
+    return Config.FallbackVoiceRange
+end
+
+local function getMaxDistance(rangeLevel)
+    local rangeCfg = Config.GetRangeConfig(rangeLevel or settings.rangeLevel)
+    if rangeCfg.mode == 'absolute' then
+        return math.max(rangeCfg.value, Config.MinDistance + 0.01)
+    end
+    return math.max((getVoiceRange() * rangeCfg.value), Config.MinDistance + 0.01)
+end
+
+local function localPlayerCoords()
+    return GetEntityCoords(PlayerPedId())
+end
+
+local function getSelectedVolumeLevel()
+    if selectedSlot > 0 then
+        return settings.favoriteSlotVolumes[tostring(selectedSlot)] or Config.DefaultVolumeLevel
+    end
+    return settings.volumeLevel
+end
+
+local function getSettingsSnapshot()
+    sanitizeSettings()
+    return {
+        defaultPlaySound = settings.defaultPlaySound,
+        deathSound = settings.deathSound,
+        rangeLevel = settings.rangeLevel,
+        volumeLevel = settings.volumeLevel,
+        favorites = cloneMap(settings.favorites),
+        favoriteSlots = cloneSlots(settings.favoriteSlots),
+        favoriteSlotVolumes = cloneSlotVolumes(settings.favoriteSlotVolumes)
+    }
+end
+
+local function buildVisibleCatalog()
+    return Config.GetSoundCatalog(deletedMap)
+end
+
+local function buildDeletedCatalog()
+    return Config.GetDeletedCatalog(deletedMap)
+end
+
+local function buildHotbarPayload()
+    local slots = {
+        {
+            slot = 0,
+            file = settings.defaultPlaySound,
+            label = Config.GetSoundLabel(settings.defaultPlaySound),
+            volumeLevel = settings.volumeLevel,
+            volumeName = Config.GetVolumeName(settings.volumeLevel),
+            isSelected = selectedSlot == 0
+        }
+    }
+
+    for i = 1, 9 do
+        local key = tostring(i)
+        local file = settings.favoriteSlots[key]
+        slots[#slots + 1] = {
+            slot = i,
+            file = file or '',
+            label = file and Config.GetSoundLabel(file) or '未設定',
+            volumeLevel = settings.favoriteSlotVolumes[key] or Config.DefaultVolumeLevel,
+            volumeName = Config.GetVolumeName(settings.favoriteSlotVolumes[key] or Config.DefaultVolumeLevel),
+            isSelected = selectedSlot == i
+        }
+    end
+
+    return {
+        visible = handsUp and (not uiOpen),
+        slots = slots,
+        currentLabel = Config.GetSoundLabel(currentPlaySound),
+        version = Config.Version
+    }
+end
+
+local function hydrateUi()
+    soundCatalog = buildVisibleCatalog()
+    deletedCatalog = buildDeletedCatalog()
+    sendUi('hydrate', {
+        settings = getSettingsSnapshot(),
+        soundCatalog = soundCatalog,
+        deletedCatalog = deletedCatalog,
+        hotbar = buildHotbarPayload(),
+        isAdmin = isAdmin,
+        rangeLevels = Config.RangeLevels,
+        volumeLevels = Config.VolumeLevels,
+        version = Config.Version
+    })
+end
+
+local function updateHud()
+    sendUi('setHotbar', buildHotbarPayload())
+end
+
+local function setUiState(open)
+    uiOpen = open
+    SetNuiFocus(open, open)
+    SetNuiFocusKeepInput(false)
+    if not open then
+        showRangePreview = false
+    end
+
+    sendUi(open and 'open' or 'close', {
+        settings = getSettingsSnapshot(),
+        soundCatalog = buildVisibleCatalog(),
+        deletedCatalog = buildDeletedCatalog(),
+        hotbar = buildHotbarPayload(),
+        isAdmin = isAdmin,
+        rangeLevels = Config.RangeLevels,
+        volumeLevels = Config.VolumeLevels,
+        version = Config.Version
+    })
+    updateHud()
+end
+
+local function resolvePromise(token, data)
+    local p = pendingRequests[token]
+    if not p then return end
+    pendingRequests[token] = nil
+    p:resolve(data)
+end
+
+RegisterNetEvent('3rd_meme_radio:client:reply', function(token, data)
+    resolvePromise(token, data)
+end)
+
+local function callServer(eventName, payload)
+    local p = promise.new()
+    local token = ('%s_%s_%s'):format(GetGameTimer(), math.random(1000, 9999), eventName)
+    pendingRequests[token] = p
+    TriggerServerEvent(eventName, token, payload or {})
+    return Citizen.Await(p)
+end
+
+local function stopSound(id)
+    activeSounds[id] = nil
+    sendUi('stopSound', { id = id })
+end
+
+local function stopEmitterSounds(sourceServerId)
+    for id, data in pairs(activeSounds) do
+        if data.sourceServerId == sourceServerId then
+            stopSound(id)
+        end
+    end
+end
+
+local function computeVolume(dist, maxDistance, baseVolume)
+    if dist >= maxDistance then
+        return 0.0
+    end
+
+    if dist <= Config.MinDistance then
+        return baseVolume
+    end
+
+    local t = 1.0 - ((dist - Config.MinDistance) / (maxDistance - Config.MinDistance))
+    if t < 0.0 then t = 0.0 end
+    if t > 1.0 then t = 1.0 end
+    return baseVolume * (t * t)
+end
+
+local function resolveEmitterCoords(sound)
+    local ply = GetPlayerFromServerId(sound.sourceServerId or -1)
+    if ply ~= -1 then
+        local ped = GetPlayerPed(ply)
+        if ped > 0 then
+            local coords = GetEntityCoords(ped)
+            sound.lastCoords = { x = coords.x, y = coords.y, z = coords.z }
+            return coords
+        end
+    end
+
+    if sound.lastCoords then
+        return vec3(sound.lastCoords.x, sound.lastCoords.y, sound.lastCoords.z)
+    end
+
+    return vec3(sound.coords.x, sound.coords.y, sound.coords.z)
+end
+
+local function startPreview(file)
+    if not Config.IsValidSound(file) then return end
+    sendUi('playPreview', { id = previewSoundId, file = file, volume = Config.PreviewVolume })
+end
+
+local function stopPreview()
+    sendUi('stopSound', { id = previewSoundId })
+end
+
+local function canPlayNow()
+    return GetGameTimer() - lastPlayAt >= Config.PlayCooldownMs
+end
+
+local function loadAnim()
+    if HasAnimDictLoaded(Config.HandsUpAnimDict) then return true end
+    RequestAnimDict(Config.HandsUpAnimDict)
+    local timeout = GetGameTimer() + 4000
+    while not HasAnimDictLoaded(Config.HandsUpAnimDict) and GetGameTimer() < timeout do
+        Wait(0)
+    end
+    return HasAnimDictLoaded(Config.HandsUpAnimDict)
+end
+
+local function setHandsUpState(state)
+    local ped = PlayerPedId()
+    if state then
+        if loadAnim() then
+            TaskPlayAnim(ped, Config.HandsUpAnimDict, Config.HandsUpAnimName, 2.0, 2.0, -1, Config.HandsUpAnimFlags, 0.0, false, false, false)
+        end
+        handsUp = true
+    else
+        StopAnimTask(ped, Config.HandsUpAnimDict, Config.HandsUpAnimName, 1.0)
+        ClearPedSecondaryTask(ped)
+        handsUp = false
+        selectedSlot = selectedSlot > 0 and selectedSlot or 0
+        if uiOpen then
+            setUiState(false)
+        else
+            updateHud()
+        end
+    end
+    updateHud()
+end
+
+local function saveNow(showSaved)
+    TriggerServerEvent('3rd_meme_radio:server:saveSettings', getSettingsSnapshot())
+    if showSaved then
+        showNotification('保存しました')
+    end
+end
+
+local function applySelection(slot, file)
+    if slot and slot > 0 then
+        selectedSlot = slot
+        currentPlaySound = file
+    else
+        selectedSlot = 0
+        currentPlaySound = settings.defaultPlaySound
+    end
+    updateHud()
+end
+
+local function requestAccess()
+    local res = callServer('3rd_meme_radio:server:requestAccess', {})
+    if type(res) ~= 'table' then
+        return false, '使用できません'
+    end
+    return res.allowed, res.reason
+end
+
+local function playCurrentSound()
+    if not canPlayNow() then return end
+    if not Config.IsValidSound(currentPlaySound) or deletedMap[currentPlaySound] then return end
+
+    lastPlayAt = GetGameTimer()
+    local payload = {
+        file = currentPlaySound,
+        coords = localPlayerCoords(),
+        maxDistance = getMaxDistance(settings.rangeLevel),
+        volume = Config.GetBaseVolume(getSelectedVolumeLevel())
+    }
+    TriggerServerEvent('3rd_meme_radio:server:playSound', payload)
+end
+
+local function toggleHandsUp()
+    if handsUp then
+        setHandsUpState(false)
+        return
+    end
+
+    local allowed, reason = requestAccess()
+    if not allowed then
+        showNotification(reason or '使用条件を満たしていません')
+        return
+    end
+
+    setHandsUpState(true)
+    playCurrentSound()
+end
+
+RegisterNetEvent('3rd_meme_radio:client:init', function(payload)
+    deletedMap = payload.deletedMap or {}
+    isAdmin = payload.isAdmin or false
+    settings = payload.settings or settings
+    settings.favoriteSlotVolumes = settings.favoriteSlotVolumes or {}
+    sanitizeSettings()
+    soundCatalog = buildVisibleCatalog()
+    deletedCatalog = buildDeletedCatalog()
+    currentPlaySound = settings.defaultPlaySound
+    selectedSlot = 0
+    updateHud()
+    if uiOpen then
+        hydrateUi()
+    end
+end)
+
+RegisterNetEvent('3rd_meme_radio:client:playSound', function(data)
+    if type(data) ~= 'table' then return end
+    if not data.file or deletedMap[data.file] then return end
+
+    stopEmitterSounds(data.sourceServerId)
+    local id = data.id or ('snd_' .. GetGameTimer())
+    activeSounds[id] = {
+        sourceServerId = data.sourceServerId,
+        file = data.file,
+        maxDistance = tonumber(data.maxDistance) or getMaxDistance(settings.rangeLevel),
+        baseVolume = tonumber(data.volume) or Config.GetBaseVolume(Config.DefaultVolumeLevel),
+        coords = data.coords or { x = 0.0, y = 0.0, z = 0.0 }
+    }
+
+    local coords = resolveEmitterCoords(activeSounds[id])
+    local volume = computeVolume(#(localPlayerCoords() - coords), activeSounds[id].maxDistance, activeSounds[id].baseVolume)
+    sendUi('play3d', { id = id, file = data.file, volume = volume })
+end)
+
+RegisterNetEvent('3rd_meme_radio:client:syncDeleted', function(newDeletedMap)
+    deletedMap = newDeletedMap or {}
+    sanitizeSettings()
+    saveNow(false)
+    hydrateUi()
+    updateHud()
+end)
+
+RegisterNetEvent('3rd_meme_radio:client:notify', function(msg)
+    showNotification(msg)
+end)
+
+RegisterNetEvent('3rd_meme_radio:client:purchaseResult', function(ok, msg)
+    showNotification(msg or (ok and '購入しました' or '購入できませんでした'))
+end)
+
+RegisterNUICallback('closeUi', function(_, cb)
+    stopPreview()
+    setUiState(false)
+    cb('ok')
+end)
+
+RegisterNUICallback('saveSettings', function(data, cb)
+    if type(data) == 'table' then
+        settings = data
+        sanitizeSettings()
+        if selectedSlot == 0 then
+            currentPlaySound = settings.defaultPlaySound
+        end
+        saveNow(true)
+        hydrateUi()
+        updateHud()
+    end
+    cb('ok')
+end)
+
+RegisterNUICallback('previewSound', function(data, cb)
+    if data and data.file then
+        startPreview(Config.NormalizeSoundName(data.file))
+    end
+    cb('ok')
+end)
+
+RegisterNUICallback('stopPreview', function(_, cb)
+    stopPreview()
+    cb('ok')
+end)
+
+RegisterNUICallback('selectDefaultSound', function(data, cb)
+    local file = Config.NormalizeSoundName(data.file)
+    if Config.IsValidSound(file) and not deletedMap[file] then
+        settings.defaultPlaySound = file
+        if selectedSlot == 0 then
+            currentPlaySound = file
+        end
+        saveNow(false)
+        hydrateUi()
+        updateHud()
+    end
+    cb('ok')
+end)
+
+RegisterNUICallback('selectDeathSound', function(data, cb)
+    local file = data and data.file and Config.NormalizeSoundName(data.file) or ''
+    if file == '' or (Config.IsValidSound(file) and not deletedMap[file]) then
+        settings.deathSound = file
+        saveNow(false)
+        hydrateUi()
+    end
+    cb('ok')
+end)
+
+RegisterNUICallback('toggleFavorite', function(data, cb)
+    local file = Config.NormalizeSoundName(data.file)
+    if Config.IsValidSound(file) and not deletedMap[file] then
+        settings.favorites[file] = not settings.favorites[file] or nil
+        for i = 1, 9 do
+            local key = tostring(i)
+            if settings.favoriteSlots[key] == file and not settings.favorites[file] then
+                settings.favoriteSlots[key] = nil
+            end
+        end
+        saveNow(false)
+        hydrateUi()
+        updateHud()
+    end
+    cb('ok')
+end)
+
+RegisterNUICallback('assignSlot', function(data, cb)
+    local slot = tonumber(data.slot) or 0
+    local file = Config.NormalizeSoundName(data.file)
+    if slot >= 1 and slot <= 9 and settings.favorites[file] and Config.IsValidSound(file) and not deletedMap[file] then
+        settings.favoriteSlots[tostring(slot)] = file
+        settings.favoriteSlotVolumes[tostring(slot)] = Config.GetVolumeLevel(settings.favoriteSlotVolumes[tostring(slot)] or settings.volumeLevel)
+        saveNow(false)
+        hydrateUi()
+        updateHud()
+    end
+    cb('ok')
+end)
+
+RegisterNUICallback('clearSlot', function(data, cb)
+    local slot = tonumber(data.slot) or 0
+    if slot >= 1 and slot <= 9 then
+        settings.favoriteSlots[tostring(slot)] = nil
+        if selectedSlot == slot then
+            selectedSlot = 0
+            currentPlaySound = settings.defaultPlaySound
+        end
+        saveNow(false)
+        hydrateUi()
+        updateHud()
+    end
+    cb('ok')
+end)
+
+RegisterNUICallback('setSlotVolume', function(data, cb)
+    local slot = tonumber(data.slot) or 0
+    local level = Config.GetVolumeLevel(data.level)
+    if slot >= 1 and slot <= 9 then
+        settings.favoriteSlotVolumes[tostring(slot)] = level
+        saveNow(false)
+        hydrateUi()
+        updateHud()
+    end
+    cb('ok')
+end)
+
+RegisterNUICallback('setRangeLevel', function(data, cb)
+    settings.rangeLevel = Config.GetRangeLevel(data.level)
+    hydrateUi()
+    cb('ok')
+end)
+
+RegisterNUICallback('setVolumeLevel', function(data, cb)
+    settings.volumeLevel = Config.GetVolumeLevel(data.level)
+    if selectedSlot == 0 then
+        currentPlaySound = settings.defaultPlaySound
+    end
+    hydrateUi()
+    updateHud()
+    cb('ok')
+end)
+
+RegisterNUICallback('setRangePreview', function(data, cb)
+    showRangePreview = data and data.enabled or false
+    cb('ok')
+end)
+
+RegisterNUICallback('deleteSound', function(data, cb)
+    if data and data.file then
+        TriggerServerEvent('3rd_meme_radio:server:deleteSound', Config.NormalizeSoundName(data.file))
+    end
+    cb('ok')
+end)
+
+RegisterNUICallback('restoreSound', function(data, cb)
+    if data and data.file then
+        TriggerServerEvent('3rd_meme_radio:server:restoreSound', Config.NormalizeSoundName(data.file))
+    end
+    cb('ok')
+end)
+
+RegisterNUICallback('requestInit', function(_, cb)
+    TriggerServerEvent('3rd_meme_radio:server:init')
+    cb('ok')
+end)
+
+CreateThread(function()
+    Wait(1200)
+    TriggerServerEvent('3rd_meme_radio:server:init')
+end)
+
+RegisterCommand('+meme_radio_toggle', function()
+    toggleHandsUp()
+end, false)
+RegisterCommand('-meme_radio_toggle', function() end, false)
+RegisterKeyMapping('+meme_radio_toggle', '3rd Meme Radio: 手を上げて再生 / 下げる', 'keyboard', 'X')
+
+RegisterCommand('+meme_radio_ui', function()
+    if not handsUp then return end
+    stopPreview()
+    setUiState(not uiOpen)
+end, false)
+RegisterCommand('-meme_radio_ui', function() end, false)
+RegisterKeyMapping('+meme_radio_ui', '3rd Meme Radio: 設定UI', 'keyboard', 'R')
+
+CreateThread(function()
+    while true do
+        Wait(Config.VolumeTickMs)
+        local ped = PlayerPedId()
+
+        if handsUp then
+            if not IsEntityPlayingAnim(ped, Config.HandsUpAnimDict, Config.HandsUpAnimName, 3) and not IsPedRagdoll(ped) and not IsPedInAnyVehicle(ped, false) then
+                TaskPlayAnim(ped, Config.HandsUpAnimDict, Config.HandsUpAnimName, 2.0, 2.0, -1, Config.HandsUpAnimFlags, 0.0, false, false, false)
+            end
+            if not uiOpen then
+                showHelp('R でミーム設定  /  1-9 でお気に入り  /  0 でデフォルト')
+            end
+        end
+
+        local myCoords = localPlayerCoords()
+        for id, sound in pairs(activeSounds) do
+            local emitterCoords = resolveEmitterCoords(sound)
+            local dist = #(myCoords - emitterCoords)
+            local vol = computeVolume(dist, sound.maxDistance, sound.baseVolume)
+            sendUi('setVolume', { id = id, volume = vol })
+            if vol <= 0.001 and dist >= sound.maxDistance + 1.0 then
+                stopSound(id)
+            end
+        end
+    end
+end)
+
+CreateThread(function()
+    while true do
+        Wait(0)
+        if handsUp and not uiOpen then
+            if IsControlJustReleased(0, 157) then
+                local file = settings.favoriteSlots['1']
+                if file then applySelection(1, file) end
+            elseif IsControlJustReleased(0, 158) then
+                local file = settings.favoriteSlots['2']
+                if file then applySelection(2, file) end
+            elseif IsControlJustReleased(0, 160) then
+                local file = settings.favoriteSlots['3']
+                if file then applySelection(3, file) end
+            elseif IsControlJustReleased(0, 164) then
+                local file = settings.favoriteSlots['4']
+                if file then applySelection(4, file) end
+            elseif IsControlJustReleased(0, 165) then
+                local file = settings.favoriteSlots['5']
+                if file then applySelection(5, file) end
+            elseif IsControlJustReleased(0, 159) then
+                local file = settings.favoriteSlots['6']
+                if file then applySelection(6, file) end
+            elseif IsControlJustReleased(0, 161) then
+                local file = settings.favoriteSlots['7']
+                if file then applySelection(7, file) end
+            elseif IsControlJustReleased(0, 162) then
+                local file = settings.favoriteSlots['8']
+                if file then applySelection(8, file) end
+            elseif IsControlJustReleased(0, 163) then
+                local file = settings.favoriteSlots['9']
+                if file then applySelection(9, file) end
+            elseif IsControlJustReleased(0, 166) then
+                applySelection(0, settings.defaultPlaySound)
+            end
+        else
+            Wait(200)
+        end
+
+        if showRangePreview and uiOpen then
+            local radius = getMaxDistance(settings.rangeLevel)
+            local coords = localPlayerCoords()
+            DrawMarker(
+                Config.RangeMarkerType,
+                coords.x, coords.y, coords.z - 0.95,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                radius * 2.0, radius * 2.0, 0.12,
+                Config.RangePreviewColor.r, Config.RangePreviewColor.g, Config.RangePreviewColor.b, Config.RangePreviewColor.a,
+                false, false, 2, false, nil, nil, false
+            )
+        end
+    end
+end)
+
+CreateThread(function()
+    while true do
+        Wait(500)
+        local ped = PlayerPedId()
+        local dead = IsEntityDead(ped)
+        if dead and not wasDead then
+            wasDead = true
+            if settings.deathSound and settings.deathSound ~= '' and Config.IsValidSound(settings.deathSound) and not deletedMap[settings.deathSound] then
+                TriggerServerEvent('3rd_meme_radio:server:playSound', {
+                    file = settings.deathSound,
+                    coords = localPlayerCoords(),
+                    maxDistance = getMaxDistance(settings.rangeLevel),
+                    volume = Config.GetBaseVolume(settings.volumeLevel)
+                })
+            end
+        elseif not dead and wasDead then
+            wasDead = false
+        end
+    end
+end)
+
+CreateThread(function()
+    while true do
+        Wait(0)
+        if Config.ShopEnabled then
+            local coords = localPlayerCoords()
+            local dist = #(coords - Config.ShopCoords)
+            if dist < 25.0 then
+                DrawMarker(2, Config.ShopCoords.x, Config.ShopCoords.y, Config.ShopCoords.z + 0.15, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2, 0.2, 0.2, 255, 213, 74, 180, false, false, 2, false, nil, nil, false)
+                if dist <= Config.ShopInteractDistance then
+                    showHelp(('E で Meme Radio 購入  $%s'):format(Config.ShopPrice))
+                    if IsControlJustReleased(0, 38) then
+                        TriggerServerEvent('3rd_meme_radio:server:purchaseItem')
+                        Wait(500)
+                    end
+                end
+            else
+                Wait(400)
+            end
+        else
+            Wait(1000)
+        end
+    end
+end)
+
+CreateThread(function()
+    if not Config.ShopEnabled then return end
+    local model = joaat(Config.ShopPedModel)
+    RequestModel(model)
+    while not HasModelLoaded(model) do Wait(0) end
+    local ped = CreatePed(4, model, Config.ShopCoords.x, Config.ShopCoords.y, Config.ShopCoords.z - 1.0, Config.ShopHeading, false, true)
+    SetEntityAsMissionEntity(ped, true, true)
+    SetBlockingOfNonTemporaryEvents(ped, true)
+    SetPedCanRagdoll(ped, false)
+    SetEntityInvincible(ped, true)
+    FreezeEntityPosition(ped, true)
+    if Config.ShopPedScenario and Config.ShopPedScenario ~= '' then
+        TaskStartScenarioInPlace(ped, Config.ShopPedScenario, 0, true)
+    end
+end)
