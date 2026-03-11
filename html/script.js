@@ -4,6 +4,7 @@ const viewRoot = document.getElementById('viewRoot');
 const topbar = document.getElementById('topbar');
 const closeBtn = document.getElementById('closeBtn');
 const versionBadge = document.getElementById('versionBadge');
+const titleMascot = document.getElementById('titleMascot');
 
 const state = {
   open: false,
@@ -15,7 +16,7 @@ const state = {
     volumeLevel: 1,
     favorites: {},
     favoriteSlots: {},
-    favoriteSlotVolumes: {}
+    favoriteVolumes: {}
   },
   soundCatalog: [],
   deletedCatalog: [],
@@ -27,7 +28,8 @@ const state = {
   workingTarget: 'default',
   search: '',
   scroll: { list: 0, favorites: 0, deleted: 0 },
-  editingSlot: 1
+  editingSlot: 1,
+  favoriteVolumeOpen: ''
 };
 
 function resourceFetch(name, data = {}) {
@@ -49,7 +51,12 @@ function escapeHtml(value) {
 }
 
 function setState(data) {
-  if (data.settings) state.settings = data.settings;
+  if (data.settings) {
+    state.settings = data.settings;
+    state.settings.favorites = state.settings.favorites || {};
+    state.settings.favoriteSlots = state.settings.favoriteSlots || {};
+    state.settings.favoriteVolumes = state.settings.favoriteVolumes || {};
+  }
   if (Array.isArray(data.soundCatalog)) state.soundCatalog = data.soundCatalog;
   if (Array.isArray(data.deletedCatalog)) state.deletedCatalog = data.deletedCatalog;
   if (data.hotbar) state.hotbar = data.hotbar;
@@ -58,6 +65,20 @@ function setState(data) {
   if (typeof data.isAdmin === 'boolean') state.isAdmin = data.isAdmin;
   if (data.version) state.hotbar.version = data.version;
   versionBadge.textContent = `v${data.version || state.hotbar.version || '1.0.0'}`;
+  if (titleMascot) {
+    const version = encodeURIComponent(data.version || state.hotbar.version || '1.0.0');
+    const localAsset = `assets/meme.png?v=${version}`;
+    const fallbackAsset = `./assets/meme.png?v=${version}`;
+    if (!titleMascot.dataset.bound) {
+      titleMascot.dataset.bound = '1';
+      titleMascot.onerror = () => {
+        titleMascot.src = fallbackAsset;
+      };
+    }
+    if (!titleMascot.src || !titleMascot.src.includes('assets/meme.png')) {
+      titleMascot.src = localAsset;
+    }
+  }
 }
 
 function show(open) {
@@ -88,26 +109,33 @@ function filteredCatalog(source) {
 }
 
 function renderTopbar() {
-  if (!state.hotbar?.visible) {
+  const hotbar = state.hotbar || {};
+  if (!hotbar.visible) {
     topbar.classList.add('hidden');
     topbar.innerHTML = '';
     return;
   }
 
-  const cards = (state.hotbar.slots || []).map((slot) => `
+  const defaultCard = `
+    <div class="topbar-card ${Number(hotbar.selectedSlot || 0) === 0 ? 'active' : ''}">
+      <div class="slot-k">0</div>
+      <div class="slot-v">${escapeHtml(hotbar.defaultLabel || '未設定')}</div>
+    </div>
+  `;
+
+  const cards = (hotbar.slots || []).map((slot) => `
     <div class="topbar-card ${slot.isSelected ? 'active' : ''}">
-      <div class="slot-k">${slot.slot === 0 ? '0 / DEFAULT' : `${slot.slot}`}</div>
+      <div class="slot-k">${slot.slot}</div>
       <div class="slot-v">${escapeHtml(slot.label || '未設定')}</div>
-      <div class="badge">音量: ${escapeHtml(slot.volumeName || '')}</div>
     </div>
   `).join('');
 
   topbar.innerHTML = `
-    <div class="topbar-title">
-      <span>現在: ${escapeHtml(state.hotbar.currentLabel || '')}</span>
-      <span>v${escapeHtml(state.hotbar.version || '1.0.0')}</span>
-      <span>R: 設定 / 1-9: お気に入り / 0: デフォルト</span>
+    <div class="topbar-main">
+      <div>現在: ${escapeHtml(hotbar.currentLabel || '')}</div>
+      <div>R: 設定</div>
     </div>
+    ${defaultCard}
     ${cards}
   `;
   topbar.classList.remove('hidden');
@@ -136,14 +164,14 @@ function renderMain() {
         <button class="action-btn" data-action="open-range">広さ設定</button>
       </div>
       <div class="card">
-        <h3>デフォルト音量</h3>
-        <p>デフォルト音と、スロット 0 の音量です。</p>
+        <h3>音量設定</h3>
+        <p>再生した音が周りのプレイヤーに聞こえる大きさを変えます。</p>
         <div class="current">現在: ${escapeHtml(state.volumeLevels[(state.settings.volumeLevel || 1) - 1]?.name || '')}</div>
         <button class="action-btn" data-action="open-volume">音量設定</button>
       </div>
       <div class="card">
         <h3>お気に入り設定</h3>
-        <p>お気に入り登録した音源を 1〜9 のスロットに入れます。各スロットごとに音量も変えられます。</p>
+        <p>お気に入り登録した音源を 1〜9 のスロットに入れます。各種お気に入りの音量は一覧の音量マークから変えられます。</p>
         <button class="action-btn" data-action="open-favorites">お気に入り設定</button>
       </div>
       ${state.isAdmin ? `
@@ -166,9 +194,13 @@ function renderList(target) {
 
   const current = target === 'death' ? state.settings.deathSound : state.settings.defaultPlaySound;
   const title = target === 'death' ? '死亡時の音設定' : 'MP3変更';
-  const desc = target === 'death' ? '未選択にすると死亡時は無音です。' : '再生は自分だけ、選択でデフォルト音に設定されます。';
+  const visibleCatalog = filteredCatalog('catalog');
+  const totalCatalogCount = state.soundCatalog.length;
+  const desc = target === 'death'
+    ? '未選択にすると死亡時は無音です。'
+    : `再生は自分だけ、選択でデフォルト音に設定されます。現在のMP3数: ${visibleCatalog.length}件 / 全体 ${totalCatalogCount}件`;
 
-  const items = filteredCatalog('catalog').map((row) => {
+  const items = visibleCatalog.map((row) => {
     const file = row.file;
     const label = row.label || row.file;
     const isSelected = current === file;
@@ -201,6 +233,7 @@ function renderList(target) {
       </div>
       <div class="list-tools">
         <input id="searchInput" class="search-input" placeholder="タイトル / ファイル名で検索" value="${escapeHtml(state.search)}">
+        ${target === 'default' ? '<button class="sub-btn gold" data-action="open-favorites">お気に入り設定</button>' : ''}
         <button class="sub-btn" data-action="back">戻る</button>
       </div>
     </div>
@@ -258,8 +291,8 @@ function renderVolume() {
   viewRoot.innerHTML = `
     <div class="list-header">
       <div>
-        <h2>デフォルト音量</h2>
-        <p>スロット 0 と通常再生に使う音量です。</p>
+        <h2>音量設定</h2>
+        <p>ここで変更した音量は、自分だけでなく周りのプレイヤーに聞こえる大きさにも反映されます。</p>
       </div>
       <button class="sub-btn" data-action="back">戻る</button>
     </div>
@@ -280,51 +313,61 @@ function favoriteRows() {
 
 function renderFavorites() {
   state.currentView = 'favorites';
+  if (!Number.isInteger(state.editingSlot) || state.editingSlot < 1 || state.editingSlot > 9) state.editingSlot = 1;
   const slotCards = Array.from({ length: 9 }, (_, idx) => {
     const slot = idx + 1;
     const key = String(slot);
     const file = state.settings.favoriteSlots[key] || '';
     const label = file ? getLabel(file) : '未設定';
-    const level = state.settings.favoriteSlotVolumes[key] || state.settings.volumeLevel || 1;
     return `
       <button class="slot-btn ${state.editingSlot === slot ? 'active' : ''}" data-action="pick-slot" data-slot="${slot}">
         <div class="slot-number">スロット ${slot}</div>
         <div class="slot-label">${escapeHtml(label)}</div>
         <div class="slot-empty">${file ? escapeHtml(file) : '空きスロット'}</div>
-        <div class="slot-volume-row">
-          <button data-action="slot-volume-down" data-slot="${slot}">-</button>
-          <span>${escapeHtml(state.volumeLevels[(level || 1) - 1]?.name || '')}</span>
-          <button data-action="slot-volume-up" data-slot="${slot}">+</button>
-        </div>
       </button>
     `;
   }).join('');
 
-  const items = favoriteRows().map((row) => `
-    <div class="favorite-item">
-      <div>
-        <div class="slot-label">${escapeHtml(row.label || row.file)}</div>
-        <div class="filename">${escapeHtml(row.file)}</div>
+  const items = favoriteRows().map((row) => {
+    const file = row.file;
+    const level = Number(state.settings.favoriteVolumes?.[file] || state.settings.volumeLevel || 1);
+    const currentVol = state.volumeLevels[(level || 1) - 1];
+    const isOpen = state.favoriteVolumeOpen === file;
+    return `
+      <div class="favorite-item">
+        <div>
+          <div class="slot-label">${escapeHtml(row.label || row.file)}</div>
+          <div class="filename">${escapeHtml(row.file)}</div>
+          ${isOpen ? `
+          <div class="favorite-volume-panel">
+            <p>各種お気に入りの音の大きさを変えられます。変更した大きさは保存され、周りに聞こえる音にも反映されます。</p>
+            <div class="favorite-volume-slider-row">
+              <input class="favorite-volume-slider" type="range" min="1" max="${state.volumeLevels.length}" step="1" value="${level}" data-action="favorite-volume-slider" data-file="${escapeHtml(file)}">
+              <div class="favorite-volume-current">${escapeHtml(currentVol?.name || '')} ${Math.round((currentVol?.value || 0) * 100)}%</div>
+            </div>
+          </div>` : ''}
+        </div>
+        <div class="item-actions">
+          <button class="icon-mini-btn ${isOpen ? 'active' : ''}" title="お気に入り音量" data-action="toggle-favorite-volume" data-file="${escapeHtml(file)}">🔊</button>
+          <button class="sub-btn blue" data-action="preview" data-file="${escapeHtml(file)}">再生</button>
+          <button class="sub-btn gold" data-action="assign-slot" data-slot="${state.editingSlot}" data-file="${escapeHtml(file)}">スロット${state.editingSlot}に入れる</button>
+        </div>
       </div>
-      <div class="item-actions">
-        <button class="sub-btn blue" data-action="preview" data-file="${escapeHtml(row.file)}">再生</button>
-        <button class="sub-btn gold" data-action="assign-slot" data-slot="${state.editingSlot}" data-file="${escapeHtml(row.file)}">スロット${state.editingSlot}に入れる</button>
-      </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
 
   viewRoot.innerHTML = `
     <div class="list-header">
       <div>
         <h2>お気に入り設定</h2>
-        <p>左でスロットを選び、右の音源を入れてください。各スロットの音量は左で変更できます。</p>
+        <p>上でスロットを選び、下のお気に入り音源を入れてください。再生の左にある音量マークで、各種お気に入りの音の大きさを変えられます。</p>
       </div>
       <button class="sub-btn" data-action="back">戻る</button>
     </div>
     <div class="favorite-layout">
       <div class="card">
         <h3>1〜9 スロット</h3>
-        <p>手を上げている間に 1〜9 で切り替えます。0 はデフォルト音です。</p>
+        <p>手を上げている間、キーボード 1〜9 で切り替えられます。0キーはデフォルト音に戻します。</p>
         <div class="slot-grid">${slotCards}</div>
         <div class="footer-actions">
           <button class="action-btn" data-action="clear-slot" data-slot="${state.editingSlot}">選択中スロットを解除</button>
@@ -332,8 +375,8 @@ function renderFavorites() {
       </div>
       <div class="card">
         <h3>お気に入り一覧</h3>
-        <p>MP3一覧の ☆ で登録した音源だけ表示されます。</p>
-        <div class="favorite-list">${items || '<div class="empty-note">お気に入りがありません。MP3一覧の☆で追加してください。</div>'}</div>
+        <p>MP3一覧の星で登録した音源だけがここに出ます。</p>
+        <div class="favorite-list">${items || '<div class="empty-note">お気に入りがありません。MP3一覧で☆を押してください。</div>'}</div>
       </div>
     </div>
     <div class="footer-actions">
@@ -403,8 +446,7 @@ function stopAndRemoveAudio(id) {
 
 function buildAudioSrc(file) {
   const encoded = encodeURIComponent(file);
-  const resource = typeof GetParentResourceName === 'function' ? GetParentResourceName() : '3rd_meme_radio';
-  return `https://cfx-nui-${resource}/html/audio/${encoded}`;
+  return `audio/${encoded}`;
 }
 
 function ensureAudio(id, file) {
@@ -412,23 +454,54 @@ function ensureAudio(id, file) {
   if (!audio) {
     audio = new Audio();
     audio.preload = 'auto';
+    audio.autoplay = false;
     audio.addEventListener('ended', () => stopAndRemoveAudio(id));
     state.activeAudio.set(id, audio);
   }
   const src = buildAudioSrc(file);
-  if (audio.src !== src) {
-    audio.src = src;
-    audio.load();
+  const currentSrc = audio.getAttribute('src') || '';
+  if (currentSrc !== src) {
+    audio.setAttribute('src', src);
   }
   return audio;
+}
+
+function tryPlayAudio(audio, file) {
+  const playPromise = audio.play();
+  if (playPromise && typeof playPromise.catch === 'function') {
+    playPromise.catch((err) => {
+      console.error('meme radio play failed', file, err);
+      setTimeout(() => {
+        const retryPromise = audio.play();
+        if (retryPromise && typeof retryPromise.catch === 'function') {
+          retryPromise.catch((retryErr) => console.error('meme radio retry failed', file, retryErr));
+        }
+      }, 75);
+    });
+  }
 }
 
 function playAudio(id, file, volume) {
   stopAndRemoveAudio(id);
   const audio = ensureAudio(id, file);
-  audio.currentTime = 0;
   audio.volume = Math.max(0, Math.min(1, Number(volume) || 0));
-  audio.play().catch((err) => console.error('meme radio play failed', file, err));
+
+  const startPlayback = () => {
+    try {
+      audio.currentTime = 0;
+    } catch (e) {
+      // ignore seek errors before metadata is ready
+    }
+    tryPlayAudio(audio, file);
+  };
+
+  if (audio.readyState >= 2) {
+    startPlayback();
+    return;
+  }
+
+  audio.addEventListener('canplay', startPlayback, { once: true });
+  audio.load();
 }
 
 function setVolume(id, volume) {
@@ -489,7 +562,7 @@ document.addEventListener('click', async (event) => {
   if (!target) return;
   const action = target.dataset.action;
   const file = target.dataset.file;
-  const slot = Number(target.dataset.slot || 0);
+  const slot = Number(target.dataset.slot || 1);
   const level = Number(target.dataset.level || 0);
 
   if (action === 'close') {
@@ -522,6 +595,7 @@ document.addEventListener('click', async (event) => {
     return;
   }
   if (action === 'open-favorites') {
+    state.editingSlot = 1;
     renderFavorites();
     return;
   }
@@ -531,7 +605,8 @@ document.addEventListener('click', async (event) => {
     return;
   }
   if (action === 'preview') {
-    await resourceFetch('previewSound', { file });
+    const level = Number(state.settings.favoriteVolumes?.[file] || state.settings.volumeLevel || 1);
+    await resourceFetch('previewSound', { file, level });
     return;
   }
   if (action === 'toggle-favorite') {
@@ -574,7 +649,7 @@ document.addEventListener('click', async (event) => {
     return;
   }
   if (action === 'pick-slot') {
-    state.editingSlot = slot;
+    state.editingSlot = Math.min(9, Math.max(1, slot || 1));
     renderFavorites();
     return;
   }
@@ -587,12 +662,38 @@ document.addEventListener('click', async (event) => {
     await resourceFetch('clearSlot', { slot });
     return;
   }
-  if (action === 'slot-volume-down' || action === 'slot-volume-up') {
-    const current = Number(state.settings.favoriteSlotVolumes[String(slot)] || state.settings.volumeLevel || 1);
-    const next = action === 'slot-volume-down' ? Math.max(1, current - 1) : Math.min(state.volumeLevels.length, current + 1);
-    await resourceFetch('setSlotVolume', { slot, level: next });
+  if (action === 'toggle-favorite-volume') {
+    saveScroll('favorites', '.favorite-list');
+    state.favoriteVolumeOpen = state.favoriteVolumeOpen === file ? '' : file;
+    renderFavorites();
     return;
   }
+});
+
+
+document.addEventListener('input', (event) => {
+  const target = event.target;
+  if (!target?.matches?.('[data-action="favorite-volume-slider"]')) return;
+  const file = target.dataset.file;
+  const level = Number(target.value || 1);
+  state.settings.favoriteVolumes = state.settings.favoriteVolumes || {};
+  state.settings.favoriteVolumes[file] = level;
+  const row = target.closest('.favorite-volume-panel');
+  const info = state.volumeLevels[level - 1];
+  const label = row?.querySelector('.favorite-volume-current');
+  if (label) {
+    label.textContent = `${info?.name || ''} ${Math.round((info?.value || 0) * 100)}%`;
+  }
+});
+
+document.addEventListener('change', async (event) => {
+  const target = event.target;
+  if (!target?.matches?.('[data-action="favorite-volume-slider"]')) return;
+  saveScroll('favorites', '.favorite-list');
+  const file = target.dataset.file;
+  const level = Number(target.value || 1);
+  state.favoriteVolumeOpen = file;
+  await resourceFetch('setFavoriteVolume', { file, level });
 });
 
 document.addEventListener('keydown', (event) => {
