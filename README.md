@@ -13,8 +13,7 @@ FiveM / QBCore 向けのミームラジオリソースです。
 - 通常再生 MP3 設定
 - 死亡時 MP3 設定
 - お気に入り登録
-- お気に入り 1〜9 スロット
-- `0` キーでデフォルト音へ戻す
+- お気に入り 0〜9 スロット
 - 音量設定
   - 全体音量
   - お気に入りごとの個別音量
@@ -34,8 +33,7 @@ FiveM / QBCore 向けのミームラジオリソースです。
 
 - `X` : 手上げ / 再生
 - `R` : 設定UI
-- `1〜9` : お気に入りスロット切替
-- `0` : デフォルト音へ戻す
+- `0〜9` : お気に入りスロット切替
 
 ## 導入
 
@@ -101,11 +99,118 @@ ensure 3rd_meme_radio
 - `Config.UseItemRequirement`
   - `true` でアイテム所持中のみ使用可能
   - `false` でアイテム無しでも使用可能
-- **デフォルトは `false`**
+- 現在のデフォルトは `true`
 - `Config.RequiredItemName`
   - 必須アイテム名。デフォルトは `meme_radio`
 
-### ショップ設定
+## 使用制限の設定例
+
+### 1. 誰でも `X` で使えるようにする
+
+アイテム不要、権限不要にしたい場合は、`config.lua` を次のようにしてください。
+
+```lua
+Config.UseItemRequirement = false
+Config.PermissionEnabled = false
+```
+
+この設定では、全プレイヤーが `X` でミームラジオを使えます。
+
+### 2. アイテムを持っている人だけ使えるようにする
+
+```lua
+Config.UseItemRequirement = true
+Config.RequiredItemName = 'meme_radio'
+Config.PermissionEnabled = false
+```
+
+この設定では、`meme_radio` アイテムを持っている人だけが使えます。  
+権限チェックは行いません。
+
+### 3. 特定の人だけ使えるようにする
+
+権限リストで許可した人だけ使えるようにしたい場合は、`config.lua` を次のようにしてください。
+
+```lua
+Config.PermissionEnabled = true
+Config.UseItemRequirement = false
+
+Config.AllowLicenses = {
+    'license:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+    'license:yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+}
+
+Config.AllowDiscordIds = {
+    'discord:123456789012345678',
+    'discord:987654321098765432'
+}
+```
+
+この設定では、`AllowLicenses` または `AllowDiscordIds` に入っている人だけが使えます。  
+アイテムは不要です。
+
+### 4. 特定の人だけ、さらにアイテム所持時のみ使えるようにする
+
+```lua
+Config.PermissionEnabled = true
+Config.UseItemRequirement = true
+Config.RequiredItemName = 'meme_radio'
+
+Config.AllowLicenses = {
+    'license:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+}
+
+Config.AllowDiscordIds = {
+    'discord:123456789012345678'
+}
+```
+
+この設定では、以下の両方を満たした時だけ使えます。
+
+- 許可リストに入っている
+- `meme_radio` アイテムを持っている
+
+つまり、**一番厳しい制限**です。
+
+### 5. ライセンスだけで制限したい場合
+
+```lua
+Config.PermissionEnabled = true
+Config.UseItemRequirement = false
+
+Config.AllowLicenses = {
+    'license:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+}
+
+Config.AllowDiscordIds = {}
+```
+
+### 6. Discord ID だけで制限したい場合
+
+```lua
+Config.PermissionEnabled = true
+Config.UseItemRequirement = false
+
+Config.AllowLicenses = {}
+
+Config.AllowDiscordIds = {
+    'discord:123456789012345678'
+}
+```
+
+## FiveM license / discord id の確認方法
+
+サーバー側でプレイヤー識別子を確認したい場合は、接続ログや識別子取得用の既存管理スクリプトで確認してください。  
+このリソースでは `license:` と `discord:` identifier をそのまま `config.lua` に記載します。
+
+例:
+
+```text
+license:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+discord:123456789012345678
+```
+
+## ショップ設定
 
 - `Config.ShopEnabled`
   - 購入ショップを有効化
@@ -117,6 +222,8 @@ ensure 3rd_meme_radio
   - PEDモデル
 - `Config.ShopPedScenario`
   - PEDの待機モーション
+- `Config.ShopHeading`
+  - PEDの向き
 
 ### 管理者設定
 
@@ -155,7 +262,8 @@ add_principal identifier.license:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx group.
 ### アイテム制限
 
 - `Config.UseItemRequirement = true` なら `RequiredItemName` 所持中のみ使用可
-- デフォルトは `false`
+- `Config.UseItemRequirement = false` ならアイテム無しでも使用可
+- 現在のデフォルトは `true`
 - アイテム名デフォルトは `meme_radio`
 
 ### 管理者削除
@@ -233,16 +341,14 @@ assets/meme.png
 
 ## バージョン
 
-- UI 表示: `v1.2.5`
-- resource version: `1.2.5`
-
+- UI 表示: `v1.2.10`
+- resource version: `1.2.10`
 
 ## キー切替
-- 0キー: 現在のデフォルトMP3へ戻す
-- 1〜9キー: お気に入りスロット切替
-- お気に入り割り当てUIは 1〜9 スロットのみ
 
+- `0〜9キー`: お気に入りスロット切替
 
 ## Hotfix 1.2.10
+
 - NUI audio playback path changed to relative file loading
 - Added safer delayed playback retry for Audio.play() DOMException
