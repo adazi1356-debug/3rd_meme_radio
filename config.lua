@@ -1,6 +1,6 @@
 Config = {}
 
-Config.Version = "1.1.0"
+Config.Version = "1.2.9"
 Config.Debug = false
 
 Config.DefaultPlaySound = 'hey-dont-shut-arc-raiders.mp3'
@@ -44,7 +44,7 @@ Config.ShopPrice = 1000
 Config.ShopPedModel = 's_m_y_ammucity_01'
 Config.ShopPedScenario = 'WORLD_HUMAN_CLIPBOARD'
 Config.ShopCoords = vector3(257.42, -1093.96, 46.91)
-Config.ShopHeading = 180.0
+Config.ShopHeading = 0.0
 Config.ShopInteractDistance = 2.0
 Config.ShopBlipEnabled = false
 
@@ -59,7 +59,10 @@ Config.AdminAce = '3rd_meme_radio.admin'
 
 Config.LegacySoundMap = {
     ['hey-dont-shut-arc-raiders .mp3'] = 'hey-dont-shut-arc-raiders.mp3',
-    ['dont-shoot-arc-raiders特別.mp3'] = 'dont-shoot-arc-raiders-special.mp3'
+    ['dont-shoot-arc-raiders特別.mp3'] = 'dont-shoot-arc-raiders-special.mp3',
+    ['meme-de-creditos-finales_qhtijyq.mp3'] = 'meme-de-creditos-finales.mp3',
+    ['musuka-nu-rasenaihougaliang-izo-1.mp3'] = 'musuka-nu-rasenaihougaliang-izo.mp3',
+    ['musuka-nu-rasenaihougaliang-izo (1).mp3'] = 'musuka-nu-rasenaihougaliang-izo.mp3'
 }
 
 Config.SoundEntries = {
@@ -170,7 +173,6 @@ Config.SoundEntries = {
     { file = "musuka-ming-qi-i.mp3", label = "ムスカ 名器ぃ" },
     { file = "musuka-shao-kifu-tsuteyaru.mp3", label = "ムスカ 少し気をつけてやる" },
     { file = "musuka-shi-jian-da.mp3", label = "ムスカ 時間だ" },
-    { file = "musuka-nu-rasenaihougaliang-izo-1.mp3", label = "ムスカ 濡らせない方が良いぞ 2" },
     { file = "metal-gear-alert-sound-effect_xkohrez.mp3", label = "メタルギア 警戒音" },
     { file = "moskau.mp3", label = "モスカウ" },
     { file = "unicoooorn_1.mp3", label = "ユニコーン" },
@@ -215,7 +217,8 @@ Config.SoundEntries = {
     { file = "kai-shi-dana.mp3", label = "開示だな" },
     { file = "dian-hua-ling-sheng.mp3", label = "電話の着信音" },
     { file = "ling-meng-konnichiha.mp3", label = "霊夢 こんにちは" },
-    { file = "initial-d.mp3", label = "頭文字D" }
+    { file = "initial-d.mp3", label = "頭文字D" },
+    { file = "musuka-nu-rasenaihougaliang-izo.mp3", label = "ムスカ 濡らせない方が良いぞ" },
 }
 
 function Config.NormalizeSoundName(name)

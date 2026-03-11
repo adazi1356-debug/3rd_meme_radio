@@ -3,8 +3,8 @@ game 'gta5'
 lua54 'yes'
 
 author '3rd Studio'
-description '3rd Meme Radio - QBCore meme radio with favorites, 3D playback, admin hide/restore and item access'
-version '1.1.0'
+description '3rd Meme Radio - QBCore meme radio with favorites, 3D playback, admin hide/restore, optional item access and shop'
+version '1.2.10'
 
 ui_page 'html/index.html'
 
@@ -19,5 +19,6 @@ files {
     'html/audio/*.mp3',
     'data/playersettings.json',
     'data/deleted_sounds.json',
-    'assets/meme.png'
+    'assets/meme.png',
+    'html/assets/meme.png'
 }

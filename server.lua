@@ -96,6 +96,37 @@ local function hasQbItem(src, itemName)
     return false
 end
 
+local function hasLsInventoryHudItem(src, itemName)
+    if GetResourceState('ls-inventoryhud') ~= 'started' then
+        return nil
+    end
+
+    local ok, result = pcall(function()
+        local items = exports['ls-inventoryhud']:GetItems(src)
+        if type(items) ~= 'table' then
+            return false
+        end
+
+        for _, item in pairs(items) do
+            if type(item) == 'table' then
+                local name = item._name or item.name or item._tpl
+                local amount = tonumber((item.info and (item.info.CurrentStack or item.info.currentStack)) or item.amount or 1) or 1
+                if name == itemName and amount > 0 then
+                    return true
+                end
+            end
+        end
+
+        return false
+    end)
+
+    if ok then
+        return result and true or false
+    end
+
+    return nil
+end
+
 local function hasItem(src, itemName)
     if not Config.UseItemRequirement then
         return true
@@ -140,6 +171,11 @@ local function hasItem(src, itemName)
         return result and true or false
     end
 
+    result = hasLsInventoryHudItem(src, itemName)
+    if result ~= nil then
+        return result
+    end
+
     return hasQbItem(src, itemName)
 end
 
@@ -166,6 +202,15 @@ local function addItem(src, itemName, amount)
         end
     end)
     if ok and result then return true end
+
+    if GetResourceState('ls-inventoryhud') == 'started' then
+        ok, result = pcall(function()
+            return exports['ls-inventoryhud']:AddItem(src, itemName, amount)
+        end)
+        if ok then
+            return result ~= false
+        end
+    end
 
     local Player = qbPlayer(src)
     if Player then
@@ -203,7 +248,7 @@ local function sanitizeSettings(data)
         volumeLevel = Config.GetVolumeLevel(data.volumeLevel),
         favorites = {},
         favoriteSlots = {},
-        favoriteSlotVolumes = {}
+        favoriteVolumes = {}
     }
 
     if not Config.IsValidSound(out.defaultPlaySound) or deletedSounds[out.defaultPlaySound] then
@@ -235,14 +280,28 @@ local function sanitizeSettings(data)
         end
     end
 
+    if type(data.favoriteVolumes) == 'table' then
+        for file, level in pairs(data.favoriteVolumes) do
+            file = Config.NormalizeSoundName(file)
+            if out.favorites[file] and Config.IsValidSound(file) and not deletedSounds[file] then
+                out.favoriteVolumes[file] = Config.GetVolumeLevel(level)
+            end
+        end
+    end
+
     if type(data.favoriteSlotVolumes) == 'table' then
         for i = 1, 9 do
             local key = tostring(i)
-            out.favoriteSlotVolumes[key] = Config.GetVolumeLevel(data.favoriteSlotVolumes[key] or data.favoriteSlotVolumes[i] or out.volumeLevel)
+            local file = out.favoriteSlots[key]
+            if file and not out.favoriteVolumes[file] then
+                out.favoriteVolumes[file] = Config.GetVolumeLevel(data.favoriteSlotVolumes[key] or data.favoriteSlotVolumes[i] or out.volumeLevel)
+            end
         end
-    else
-        for i = 1, 9 do
-            out.favoriteSlotVolumes[tostring(i)] = out.volumeLevel
+    end
+
+    for file in pairs(out.favorites) do
+        if not out.favoriteVolumes[file] then
+            out.favoriteVolumes[file] = out.volumeLevel
         end
     end
 

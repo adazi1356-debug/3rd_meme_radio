@@ -1,7 +1,7 @@
 # 3rd Meme Radio
 
 FiveM / QBCore 向けのミームラジオリソースです。  
-`X` で手を上げて音を再生し、`R` で設定UIを開けます。
+`X` で手上げトグル、`R` で設定UIを開き、距離減衰付きでMP3を周囲へ再生できます。
 
 ## 主な機能
 
@@ -14,23 +14,28 @@ FiveM / QBCore 向けのミームラジオリソースです。
 - 死亡時 MP3 設定
 - お気に入り登録
 - お気に入り 1〜9 スロット
-- `0` はデフォルト音
-- スロットごとの個別音量
+- `0` キーでデフォルト音へ戻す
+- 音量設定
+  - 全体音量
+  - お気に入りごとの個別音量
 - 近距離 1m / 3m を含む広さ設定
 - 広さ変更中はリング表示
 - 保存通知
 - 管理者による MP3 非表示 / 復帰
 - プレイヤーごとの設定保存
-- meme_radio アイテム所持でのみ使用可能
 - QBCore 現金購入ショップ付き
-- QBCore / QB Inventory / QS Inventory / OX Inventory の所持判定に対応
+- インベントリ所持判定対応
+  - qb-inventory
+  - qs-inventory
+  - ox_inventory
+  - ls-inventoryhud
 
 ## デフォルトキー
 
 - `X` : 手上げ / 再生
 - `R` : 設定UI
 - `1〜9` : お気に入りスロット切替
-- `0` : デフォルト音へ切替
+- `0` : デフォルト音へ戻す
 
 ## 導入
 
@@ -41,58 +46,174 @@ FiveM / QBCore 向けのミームラジオリソースです。
 ensure 3rd_meme_radio
 ```
 
-3. `qb-core/shared/items.lua` などに `meme_radio` アイテムを追加
-4. 画像 `assets/meme.png` を使うインベントリ画像フォルダへコピー
+3. 必要に応じて `qb-core/shared/items.lua` などへ `meme_radio` アイテムを追加
+4. 必要に応じて `assets/meme.png` を各インベントリ画像フォルダへコピー
 
 ## 設定
 
 すべて `config.lua` にあります。
 
-- 音源一覧と表示名
-- 権限
-- 必須アイテム
-- ショップ座標
-- 管理者 ACE
-- コピペ用の item snippet
+### 基本設定
 
-## 権限
+- `Config.DefaultPlaySound`
+  - デフォルト再生音
+- `Config.DefaultDeathSound`
+  - 死亡時のデフォルト音。空文字なら無音
+- `Config.DefaultRangeLevel`
+  - デフォルト広さレベル
+- `Config.DefaultVolumeLevel`
+  - デフォルト音量レベル
+- `Config.PreviewVolume`
+  - UI内で自分だけ再生する試聴音量
+- `Config.PlayCooldownMs`
+  - X連打時の再生クールダウン
 
-デフォルトでは `Config.PermissionEnabled = false` です。  
-この状態では、**meme_radio アイテムを持っていれば使えます**。
+### 広さ設定
 
-権限制にしたい場合:
+- `Config.RangeLevels`
+  - 1m / 3m の近距離と、ボイスレンジ倍率ベースの広さを設定
+- `Config.RangePreviewColor`
+  - リングマーカー色
+- `Config.RangeMarkerType`
+  - リングマーカー種類
 
-```lua
-Config.PermissionEnabled = true
-```
+### 音量設定
 
-その上で、以下のどちらかを使ってください。
+- `Config.VolumeLevels`
+  - UIで選べる音量一覧
+- ここで変更した音量は、自分だけでなく周りのプレイヤーに聞こえる大きさにも反映されます
 
+### 権限設定
+
+- `Config.PermissionEnabled = true`
+  - 許可リスト制を有効化
 - `Config.AllowLicenses`
+  - FiveM license を追加
 - `Config.AllowDiscordIds`
+  - discord identifier を追加  
+  例: `discord:123456789012345678`
 
-### 管理者
+> Discordロールそのものの判定は、この単体リソースだけではできません。  
+> ロール情報を取得する外部Discord連携が必要です。
 
-管理者削除を使う場合は ACE をおすすめします。
+### アイテム制限
+
+- `Config.UseItemRequirement`
+  - `true` でアイテム所持中のみ使用可能
+  - `false` でアイテム無しでも使用可能
+- **デフォルトは `false`**
+- `Config.RequiredItemName`
+  - 必須アイテム名。デフォルトは `meme_radio`
+
+### ショップ設定
+
+- `Config.ShopEnabled`
+  - 購入ショップを有効化
+- `Config.ShopPrice`
+  - 価格
+- `Config.ShopCoords`
+  - 設置座標
+- `Config.ShopPedModel`
+  - PEDモデル
+- `Config.ShopPedScenario`
+  - PEDの待機モーション
+
+### 管理者設定
+
+- `Config.UseAdminAce = true`
+  - ACE権限で管理者判定
+- `Config.AdminAce = '3rd_meme_radio.admin'`
 
 ```cfg
 add_ace group.admin 3rd_meme_radio.admin allow
 ```
 
-## 管理者機能
+または
 
-管理者で UI を開くと、MP3 一覧にゴミ箱が表示されます。
+```cfg
+add_principal identifier.license:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx group.admin
+```
 
+## 3rd Meme Radio 設定メモ
+
+### MP3追加 / タイトル変更
+
+1. `html/audio` に mp3 を入れる
+2. `Config.SoundEntries` に1行追加する
+
+```lua
+{ file = 'my-sound.mp3', label = 'マイサウンド' }
+```
+
+### 権限
+
+- `Config.PermissionEnabled = true` にすると許可リスト制になります
+- `Config.AllowLicenses` に FiveM license を追加
+- `Config.AllowDiscordIds` に discord ID を追加
+- Discordロール判定は外部連携が必要です
+
+### アイテム制限
+
+- `Config.UseItemRequirement = true` なら `RequiredItemName` 所持中のみ使用可
+- デフォルトは `false`
+- アイテム名デフォルトは `meme_radio`
+
+### 管理者削除
+
+- 管理者で UI を開くと MP3 一覧にゴミ箱が表示されます
 - 削除 → 一般ユーザーには非表示
 - 削除一覧 → 戻すと即時復帰
 - リソース再起動不要
 
-## ショップ
+## コピペ用サンプル
 
-- 座標: `vector3(257.42, -1093.96, 46.91)`
-- 価格: `$1000`
-- 現金払い
-- アイテム名: `meme_radio`
+### QBCore item sample - qb-core/shared/items.lua
+
+```lua
+['meme_radio'] = {
+    ['name'] = 'meme_radio',
+    ['label'] = 'Meme Radio',
+    ['weight'] = 100,
+    ['type'] = 'item',
+    ['image'] = 'meme.png',
+    ['unique'] = true,
+    ['useable'] = false,
+    ['shouldClose'] = true,
+    ['description'] = 'ミームラジオを使えるアイテム'
+},
+```
+
+### OX Inventory item sample - data/items.lua
+
+```lua
+['meme_radio'] = {
+    label = 'Meme Radio',
+    weight = 100,
+    stack = false,
+    close = true,
+    description = 'ミームラジオを使えるアイテム',
+    client = {
+        image = 'meme.png'
+    }
+}
+```
+
+### QS Inventory sample
+
+```text
+item name: meme_radio
+image file: meme.png
+label: Meme Radio
+description: ミームラジオを使えるアイテム
+weight: 100
+unique: true
+```
+
+### 画像ファイル
+
+```text
+assets/meme.png
+```
 
 ## MP3追加
 
@@ -103,7 +224,25 @@ add_ace group.admin 3rd_meme_radio.admin allow
 { file = 'my-sound.mp3', label = 'マイサウンド' }
 ```
 
+## ショップ
+
+- 座標: `vector3(257.42, -1093.96, 46.91)`
+- 価格: `$1000`
+- 現金払い
+- アイテム名: `meme_radio`
+
 ## バージョン
 
-- UI 表示: `v1.1.0`
-- resource version: `1.1.0`
+- UI 表示: `v1.2.5`
+- resource version: `1.2.5`
+
+
+## キー切替
+- 0キー: 現在のデフォルトMP3へ戻す
+- 1〜9キー: お気に入りスロット切替
+- お気に入り割り当てUIは 1〜9 スロットのみ
+
+
+## Hotfix 1.2.10
+- NUI audio playback path changed to relative file loading
+- Added safer delayed playback retry for Audio.play() DOMException

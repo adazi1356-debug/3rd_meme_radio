@@ -8,7 +8,7 @@ local settings = {
     volumeLevel = Config.DefaultVolumeLevel,
     favorites = {},
     favoriteSlots = {},
-    favoriteSlotVolumes = {}
+    favoriteVolumes = {}
 }
 
 local uiOpen = false
@@ -41,7 +41,23 @@ end
 local function showHelp(msg)
     BeginTextCommandDisplayHelp('STRING')
     AddTextComponentSubstringPlayerName(msg)
-    EndTextCommandDisplayHelp(0, false, true, -1)
+    EndTextCommandDisplayHelp(0, false, false, 1)
+end
+
+local function drawHintBox(msg)
+    -- font 0 to avoid mojibake in this hint text
+    SetTextFont(0)
+    SetTextProportional(1)
+    SetTextScale(0.0, 0.38)
+    SetTextColour(244, 246, 251, 235)
+    SetTextDropShadow()
+    SetTextEdge(1, 0, 0, 0, 255)
+    SetTextOutline()
+    SetTextWrap(0.0, 0.35)
+    SetTextJustification(1)
+    BeginTextCommandDisplayText('STRING')
+    AddTextComponentSubstringPlayerName(msg)
+    EndTextCommandDisplayText(0.024, 0.47)
 end
 
 local function sendUi(action, payload)
@@ -72,13 +88,14 @@ local function cloneSlots(input)
     return out
 end
 
-local function cloneSlotVolumes(input)
+local function cloneFavoriteVolumes(input)
     local out = {}
     if type(input) ~= 'table' then return out end
-    for i = 1, 9 do
-        local key = tostring(i)
-        local value = tonumber(input[key] or input[i]) or Config.DefaultVolumeLevel
-        out[key] = Config.GetVolumeLevel(value)
+    for file, value in pairs(input) do
+        file = Config.NormalizeSoundName(file)
+        if Config.IsValidSound(file) and not deletedMap[file] then
+            out[file] = Config.GetVolumeLevel(value)
+        end
     end
     return out
 end
@@ -98,7 +115,17 @@ local function sanitizeSettings()
     settings.volumeLevel = Config.GetVolumeLevel(settings.volumeLevel)
     settings.favorites = cloneMap(settings.favorites)
     settings.favoriteSlots = cloneSlots(settings.favoriteSlots)
-    settings.favoriteSlotVolumes = cloneSlotVolumes(settings.favoriteSlotVolumes)
+    settings.favoriteVolumes = cloneFavoriteVolumes(settings.favoriteVolumes)
+
+    if type(settings.favoriteSlotVolumes) == 'table' then
+        for i = 0, 9 do
+            local key = tostring(i)
+            local file = settings.favoriteSlots[key]
+            if file and settings.favorites[file] and not settings.favoriteVolumes[file] then
+                settings.favoriteVolumes[file] = Config.GetVolumeLevel(settings.favoriteSlotVolumes[key] or settings.favoriteSlotVolumes[i] or settings.volumeLevel)
+            end
+        end
+    end
 
     for file in pairs(settings.favorites) do
         if deletedMap[file] or not Config.IsValidSound(file) then
@@ -106,28 +133,49 @@ local function sanitizeSettings()
         end
     end
 
-    for i = 1, 9 do
+    for i = 0, 9 do
         local key = tostring(i)
         local file = settings.favoriteSlots[key]
         if file and (deletedMap[file] or not Config.IsValidSound(file)) then
             settings.favoriteSlots[key] = nil
         end
-        if not settings.favoriteSlotVolumes[key] then
-            settings.favoriteSlotVolumes[key] = Config.DefaultVolumeLevel
+    end
+
+    for file in pairs(settings.favoriteVolumes) do
+        if not settings.favorites[file] or deletedMap[file] or not Config.IsValidSound(file) then
+            settings.favoriteVolumes[file] = nil
         end
     end
 
-    if selectedSlot > 0 then
-        local slotFile = settings.favoriteSlots[tostring(selectedSlot)]
-        if not slotFile then
-            selectedSlot = 0
-            currentPlaySound = settings.defaultPlaySound
+    for file in pairs(settings.favorites) do
+        if not settings.favoriteVolumes[file] then
+            settings.favoriteVolumes[file] = settings.volumeLevel
         end
+    end
+
+    settings.favoriteSlots['0'] = nil
+
+    if selectedSlot ~= 0 and settings.favoriteSlots[tostring(selectedSlot)] == nil then
+        selectedSlot = 0
+    end
+
+    if selectedSlot == 0 then
+        currentPlaySound = settings.defaultPlaySound
+    else
+        currentPlaySound = settings.favoriteSlots[tostring(selectedSlot)] or settings.defaultPlaySound
     end
 
     currentPlaySound = Config.NormalizeSoundName(currentPlaySound)
     if deletedMap[currentPlaySound] or not Config.IsValidSound(currentPlaySound) then
-        currentPlaySound = selectedSlot > 0 and (settings.favoriteSlots[tostring(selectedSlot)] or settings.defaultPlaySound) or settings.defaultPlaySound
+        currentPlaySound = settings.defaultPlaySound
+        if selectedSlot ~= 0 then
+            local selectedFile = settings.favoriteSlots[tostring(selectedSlot)]
+            if selectedFile and Config.IsValidSound(selectedFile) and not deletedMap[selectedFile] then
+                currentPlaySound = selectedFile
+            else
+                selectedSlot = 0
+            end
+        end
     end
 end
 
@@ -158,8 +206,8 @@ local function localPlayerCoords()
 end
 
 local function getSelectedVolumeLevel()
-    if selectedSlot > 0 then
-        return settings.favoriteSlotVolumes[tostring(selectedSlot)] or Config.DefaultVolumeLevel
+    if currentPlaySound and settings.favoriteVolumes[currentPlaySound] then
+        return settings.favoriteVolumes[currentPlaySound]
     end
     return settings.volumeLevel
 end
@@ -173,7 +221,7 @@ local function getSettingsSnapshot()
         volumeLevel = settings.volumeLevel,
         favorites = cloneMap(settings.favorites),
         favoriteSlots = cloneSlots(settings.favoriteSlots),
-        favoriteSlotVolumes = cloneSlotVolumes(settings.favoriteSlotVolumes)
+        favoriteVolumes = cloneFavoriteVolumes(settings.favoriteVolumes)
     }
 end
 
@@ -186,17 +234,7 @@ local function buildDeletedCatalog()
 end
 
 local function buildHotbarPayload()
-    local slots = {
-        {
-            slot = 0,
-            file = settings.defaultPlaySound,
-            label = Config.GetSoundLabel(settings.defaultPlaySound),
-            volumeLevel = settings.volumeLevel,
-            volumeName = Config.GetVolumeName(settings.volumeLevel),
-            isSelected = selectedSlot == 0
-        }
-    }
-
+    local slots = {}
     for i = 1, 9 do
         local key = tostring(i)
         local file = settings.favoriteSlots[key]
@@ -204,8 +242,6 @@ local function buildHotbarPayload()
             slot = i,
             file = file or '',
             label = file and Config.GetSoundLabel(file) or '未設定',
-            volumeLevel = settings.favoriteSlotVolumes[key] or Config.DefaultVolumeLevel,
-            volumeName = Config.GetVolumeName(settings.favoriteSlotVolumes[key] or Config.DefaultVolumeLevel),
             isSelected = selectedSlot == i
         }
     end
@@ -214,23 +250,10 @@ local function buildHotbarPayload()
         visible = handsUp and (not uiOpen),
         slots = slots,
         currentLabel = Config.GetSoundLabel(currentPlaySound),
+        defaultLabel = Config.GetSoundLabel(settings.defaultPlaySound),
+        selectedSlot = selectedSlot,
         version = Config.Version
     }
-end
-
-local function hydrateUi()
-    soundCatalog = buildVisibleCatalog()
-    deletedCatalog = buildDeletedCatalog()
-    sendUi('hydrate', {
-        settings = getSettingsSnapshot(),
-        soundCatalog = soundCatalog,
-        deletedCatalog = deletedCatalog,
-        hotbar = buildHotbarPayload(),
-        isAdmin = isAdmin,
-        rangeLevels = Config.RangeLevels,
-        volumeLevels = Config.VolumeLevels,
-        version = Config.Version
-    })
 end
 
 local function updateHud()
@@ -256,6 +279,19 @@ local function setUiState(open)
         version = Config.Version
     })
     updateHud()
+end
+
+local function hydrateUi()
+    sendUi('hydrate', {
+        settings = getSettingsSnapshot(),
+        soundCatalog = buildVisibleCatalog(),
+        deletedCatalog = buildDeletedCatalog(),
+        hotbar = buildHotbarPayload(),
+        isAdmin = isAdmin,
+        rangeLevels = Config.RangeLevels,
+        volumeLevels = Config.VolumeLevels,
+        version = Config.Version
+    })
 end
 
 local function resolvePromise(token, data)
@@ -323,9 +359,15 @@ local function resolveEmitterCoords(sound)
     return vec3(sound.coords.x, sound.coords.y, sound.coords.z)
 end
 
-local function startPreview(file)
+local function startPreview(file, volumeLevel)
     if not Config.IsValidSound(file) then return end
-    sendUi('playPreview', { id = previewSoundId, file = file, volume = Config.PreviewVolume })
+    local previewVolume = Config.PreviewVolume
+    if volumeLevel ~= nil then
+        previewVolume = Config.GetBaseVolume(volumeLevel)
+    elseif settings.favorites[file] and settings.favoriteVolumes[file] then
+        previewVolume = Config.GetBaseVolume(settings.favoriteVolumes[file])
+    end
+    sendUi('playPreview', { id = previewSoundId, file = file, volume = previewVolume })
 end
 
 local function stopPreview()
@@ -357,7 +399,6 @@ local function setHandsUpState(state)
         StopAnimTask(ped, Config.HandsUpAnimDict, Config.HandsUpAnimName, 1.0)
         ClearPedSecondaryTask(ped)
         handsUp = false
-        selectedSlot = selectedSlot > 0 and selectedSlot or 0
         if uiOpen then
             setUiState(false)
         else
@@ -375,9 +416,13 @@ local function saveNow(showSaved)
 end
 
 local function applySelection(slot, file)
-    if slot and slot > 0 then
-        selectedSlot = slot
-        currentPlaySound = file
+    if slot ~= nil then
+        selectedSlot = tonumber(slot) or 0
+        if selectedSlot == 0 then
+            currentPlaySound = settings.defaultPlaySound
+        else
+            currentPlaySound = file or settings.favoriteSlots[tostring(selectedSlot)] or settings.defaultPlaySound
+        end
     else
         selectedSlot = 0
         currentPlaySound = settings.defaultPlaySound
@@ -427,7 +472,7 @@ RegisterNetEvent('3rd_meme_radio:client:init', function(payload)
     deletedMap = payload.deletedMap or {}
     isAdmin = payload.isAdmin or false
     settings = payload.settings or settings
-    settings.favoriteSlotVolumes = settings.favoriteSlotVolumes or {}
+    settings.favoriteVolumes = settings.favoriteVolumes or {}
     sanitizeSettings()
     soundCatalog = buildVisibleCatalog()
     deletedCatalog = buildDeletedCatalog()
@@ -496,7 +541,7 @@ end)
 
 RegisterNUICallback('previewSound', function(data, cb)
     if data and data.file then
-        startPreview(Config.NormalizeSoundName(data.file))
+        startPreview(Config.NormalizeSoundName(data.file), data.level)
     end
     cb('ok')
 end)
@@ -509,10 +554,14 @@ end)
 RegisterNUICallback('selectDefaultSound', function(data, cb)
     local file = Config.NormalizeSoundName(data.file)
     if Config.IsValidSound(file) and not deletedMap[file] then
-        settings.defaultPlaySound = file
-        if selectedSlot == 0 then
-            currentPlaySound = file
+        -- MP3一覧の「選択」はスロット1だけを更新する。
+        -- スロット0(デフォルト音)はここでは変更しない。
+        settings.favorites[file] = true
+        if not settings.favoriteVolumes[file] then
+            settings.favoriteVolumes[file] = settings.volumeLevel
         end
+        settings.favoriteSlots['1'] = file
+        applySelection(1, file)
         saveNow(false)
         hydrateUi()
         updateHud()
@@ -534,11 +583,17 @@ RegisterNUICallback('toggleFavorite', function(data, cb)
     local file = Config.NormalizeSoundName(data.file)
     if Config.IsValidSound(file) and not deletedMap[file] then
         settings.favorites[file] = not settings.favorites[file] or nil
-        for i = 1, 9 do
+        if settings.favorites[file] and not settings.favoriteVolumes[file] then
+            settings.favoriteVolumes[file] = settings.volumeLevel
+        end
+        for i = 0, 9 do
             local key = tostring(i)
             if settings.favoriteSlots[key] == file and not settings.favorites[file] then
                 settings.favoriteSlots[key] = nil
             end
+        end
+        if not settings.favorites[file] then
+            settings.favoriteVolumes[file] = nil
         end
         saveNow(false)
         hydrateUi()
@@ -548,11 +603,13 @@ RegisterNUICallback('toggleFavorite', function(data, cb)
 end)
 
 RegisterNUICallback('assignSlot', function(data, cb)
-    local slot = tonumber(data.slot) or 0
+    local slot = tonumber(data.slot) or 1
     local file = Config.NormalizeSoundName(data.file)
     if slot >= 1 and slot <= 9 and settings.favorites[file] and Config.IsValidSound(file) and not deletedMap[file] then
         settings.favoriteSlots[tostring(slot)] = file
-        settings.favoriteSlotVolumes[tostring(slot)] = Config.GetVolumeLevel(settings.favoriteSlotVolumes[tostring(slot)] or settings.volumeLevel)
+        if not settings.favoriteVolumes[file] then
+            settings.favoriteVolumes[file] = settings.volumeLevel
+        end
         saveNow(false)
         hydrateUi()
         updateHud()
@@ -561,7 +618,7 @@ RegisterNUICallback('assignSlot', function(data, cb)
 end)
 
 RegisterNUICallback('clearSlot', function(data, cb)
-    local slot = tonumber(data.slot) or 0
+    local slot = tonumber(data.slot) or 1
     if slot >= 1 and slot <= 9 then
         settings.favoriteSlots[tostring(slot)] = nil
         if selectedSlot == slot then
@@ -575,11 +632,11 @@ RegisterNUICallback('clearSlot', function(data, cb)
     cb('ok')
 end)
 
-RegisterNUICallback('setSlotVolume', function(data, cb)
-    local slot = tonumber(data.slot) or 0
-    local level = Config.GetVolumeLevel(data.level)
-    if slot >= 1 and slot <= 9 then
-        settings.favoriteSlotVolumes[tostring(slot)] = level
+RegisterNUICallback('setFavoriteVolume', function(data, cb)
+    local file = data and data.file and Config.NormalizeSoundName(data.file) or ''
+    local level = Config.GetVolumeLevel(data and data.level)
+    if file ~= '' and settings.favorites[file] and Config.IsValidSound(file) and not deletedMap[file] then
+        settings.favoriteVolumes[file] = level
         saveNow(false)
         hydrateUi()
         updateHud()
@@ -655,9 +712,6 @@ CreateThread(function()
             if not IsEntityPlayingAnim(ped, Config.HandsUpAnimDict, Config.HandsUpAnimName, 3) and not IsPedRagdoll(ped) and not IsPedInAnyVehicle(ped, false) then
                 TaskPlayAnim(ped, Config.HandsUpAnimDict, Config.HandsUpAnimName, 2.0, 2.0, -1, Config.HandsUpAnimFlags, 0.0, false, false, false)
             end
-            if not uiOpen then
-                showHelp('R でミーム設定  /  1-9 でお気に入り  /  0 でデフォルト')
-            end
         end
 
         local myCoords = localPlayerCoords()
@@ -675,42 +729,54 @@ end)
 
 CreateThread(function()
     while true do
-        Wait(0)
         if handsUp and not uiOpen then
-            if IsControlJustReleased(0, 157) then
-                local file = settings.favoriteSlots['1']
-                if file then applySelection(1, file) end
-            elseif IsControlJustReleased(0, 158) then
-                local file = settings.favoriteSlots['2']
-                if file then applySelection(2, file) end
-            elseif IsControlJustReleased(0, 160) then
-                local file = settings.favoriteSlots['3']
-                if file then applySelection(3, file) end
-            elseif IsControlJustReleased(0, 164) then
-                local file = settings.favoriteSlots['4']
-                if file then applySelection(4, file) end
-            elseif IsControlJustReleased(0, 165) then
-                local file = settings.favoriteSlots['5']
-                if file then applySelection(5, file) end
-            elseif IsControlJustReleased(0, 159) then
-                local file = settings.favoriteSlots['6']
-                if file then applySelection(6, file) end
-            elseif IsControlJustReleased(0, 161) then
-                local file = settings.favoriteSlots['7']
-                if file then applySelection(7, file) end
-            elseif IsControlJustReleased(0, 162) then
-                local file = settings.favoriteSlots['8']
-                if file then applySelection(8, file) end
-            elseif IsControlJustReleased(0, 163) then
-                local file = settings.favoriteSlots['9']
-                if file then applySelection(9, file) end
-            elseif IsControlJustReleased(0, 166) then
-                applySelection(0, settings.defaultPlaySound)
-            end
+            drawHintBox('Rで設定 / 0でデフォルト / 1-9でお気に入り')
+            Wait(0)
         else
-            Wait(200)
+            Wait(150)
         end
+    end
+end)
 
+local function selectHotbarSlot(slot)
+    if not handsUp or uiOpen then
+        return
+    end
+
+    slot = tonumber(slot) or 0
+    if slot == 0 then
+        local file = settings.defaultPlaySound
+        if Config.IsValidSound(file) and not deletedMap[file] then
+            applySelection(0, file)
+            showNotification(('デフォルト音: %s'):format(Config.GetSoundLabel(file)))
+        end
+        return
+    end
+
+    if slot >= 1 and slot <= 9 then
+        local file = settings.favoriteSlots[tostring(slot)]
+        if file and Config.IsValidSound(file) and not deletedMap[file] then
+            applySelection(slot, file)
+            showNotification(('お気に入り %s: %s'):format(slot, Config.GetSoundLabel(file)))
+        end
+    end
+end
+
+for slot = 0, 9 do
+    RegisterCommand(('+meme_radio_slot_%s'):format(slot), function()
+        selectHotbarSlot(slot)
+    end, false)
+    RegisterCommand(('-meme_radio_slot_%s'):format(slot), function() end, false)
+    RegisterKeyMapping(
+        ('+meme_radio_slot_%s'):format(slot),
+        ('3rd Meme Radio: スロット%s'):format(slot),
+        'keyboard',
+        tostring(slot)
+    )
+end
+
+CreateThread(function()
+    while true do
         if showRangePreview and uiOpen then
             local radius = getMaxDistance(settings.rangeLevel)
             local coords = localPlayerCoords()
@@ -722,6 +788,9 @@ CreateThread(function()
                 Config.RangePreviewColor.r, Config.RangePreviewColor.g, Config.RangePreviewColor.b, Config.RangePreviewColor.a,
                 false, false, 2, false, nil, nil, false
             )
+            Wait(0)
+        else
+            Wait(150)
         end
     end
 end)
