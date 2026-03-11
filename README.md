@@ -1,5 +1,8 @@
 # 3rd Meme Radio
 
+preview
+https://www.youtube.com/watch?v=I-KSw9fUcxI
+
 FiveM / QBCore 向けのミームラジオリソースです。  
 `X` で手上げトグル、`R` で設定UIを開き、距離減衰付きでMP3を周囲へ再生できます。
 
